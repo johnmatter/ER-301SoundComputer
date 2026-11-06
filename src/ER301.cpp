@@ -1041,8 +1041,17 @@ struct ER301 : Module {
         ENUMS(LINK_PARAMS, 3), // momentary SELECT1+2, SELECT2+3, SELECT3+4 chords
         STORAGE_PARAM, // 0=eject 1=admin 2=user
         MODE_PARAM,    // 0=scope 1=edit 2=hold
+        // Relative encoder for remote control (MIDI-Map, param-setting
+        // bridges): set it to a signed detent count, uiStep() turns the
+        // encoder by that much and resets it to 0. No panel widget. Appended
+        // last so existing patches keep their parameter indices.
+        ENCODER_PARAM,
         PARAMS_LEN
     };
+
+    // One encoder detent, matching a mouse-wheel notch on the panel encoder
+    // (the emulator's ENCODER_SPEED).
+    static constexpr int ENCODER_COUNTS_PER_DETENT = 5;
 
     enum InputId {
         ENUMS(JACK_INPUTS, er301::NUM_INPUT_JACKS),
@@ -1137,6 +1146,8 @@ struct ER301 : Module {
                      {"eject", "admin", "user"});
         configSwitch(MODE_PARAM, 0.f, 2.f, 1.f, "Mode",
                      {"scope", "edit", "hold"});
+        configParam(ENCODER_PARAM, -64.f, 64.f, 0.f,
+                    "Encoder (relative, detents)")->snapEnabled = true;
 
         // ER-301 is a stateful computer, not a collection of independent Rack
         // knob values. Rack's Randomize command is intentionally inert.
@@ -1618,6 +1629,15 @@ struct ER301 : Module {
             engine.setModeSwitch(3 - mode);
         }
         togglesApplied = true;
+
+        // Consume a remote encoder turn: the param holds detents to turn
+        // since the last frame, then returns to rest at 0.
+        const int remoteDetents =
+            (int)std::lround(params[ENCODER_PARAM].getValue());
+        if (remoteDetents != 0) {
+            params[ENCODER_PARAM].setValue(0.f);
+            turnEncoderNow(remoteDetents * ENCODER_COUNTS_PER_DETENT);
+        }
 
         const int delta = encoderDelta.exchange(0);
         if (delta != 0)
