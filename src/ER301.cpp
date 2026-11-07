@@ -1042,8 +1042,9 @@ struct ER301 : Module {
         STORAGE_PARAM, // 0=eject 1=admin 2=user
         MODE_PARAM,    // 0=scope 1=edit 2=hold
         // Relative encoder for remote control (MIDI-Map, param-setting
-        // bridges): set it to a signed detent count, uiStep() turns the
-        // encoder by that much and resets it to 0. No panel widget. Appended
+        // bridges): set it to a signed detent count, uiStep() resets it to 0
+        // and turns the encoder that far, one detent per frame. No panel
+        // widget. Appended
         // last so existing patches keep their parameter indices.
         ENCODER_PARAM,
         PARAMS_LEN
@@ -1112,6 +1113,7 @@ struct ER301 : Module {
     int prevStorage = -1;
     int prevMode = -1;
     std::atomic<int> encoderDelta{0}; // written by the encoder widget
+    int remoteDetentsPending = 0;     // ENCODER_PARAM turns not yet played out
 
     // --- audio adapters ---
     // The direct adapter preserves one-engine-frame latency at native 48/96 kHz.
@@ -1207,6 +1209,7 @@ struct ER301 : Module {
         prevStorage = -1;
         prevMode = -1;
         encoderDelta.store(0, std::memory_order_release);
+        remoteDetentsPending = 0;
 
         nativeSampleRate = 0;
         audioConfigurationReady.store(false, std::memory_order_release);
@@ -1631,12 +1634,20 @@ struct ER301 : Module {
         togglesApplied = true;
 
         // Consume a remote encoder turn: the param holds detents to turn
-        // since the last frame, then returns to rest at 0.
+        // since the last frame, then returns to rest at 0. The firmware moves
+        // a cursor at most one step per encoder event however many counts it
+        // carries, so the detents are queued and played out one per frame,
+        // as a mouse wheel would deliver them.
         const int remoteDetents =
             (int)std::lround(params[ENCODER_PARAM].getValue());
         if (remoteDetents != 0) {
             params[ENCODER_PARAM].setValue(0.f);
-            turnEncoderNow(remoteDetents * ENCODER_COUNTS_PER_DETENT);
+            remoteDetentsPending += remoteDetents;
+        }
+        if (remoteDetentsPending != 0) {
+            const int step = remoteDetentsPending > 0 ? 1 : -1;
+            remoteDetentsPending -= step;
+            turnEncoderNow(step * ENCODER_COUNTS_PER_DETENT);
         }
 
         const int delta = encoderDelta.exchange(0);
