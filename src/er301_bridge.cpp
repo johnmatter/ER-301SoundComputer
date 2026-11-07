@@ -6,6 +6,7 @@
 #include <emu/emu.h>
 #include <emu/HostFileDialog.h>
 #include <emu/HostTextDialog.h>
+#include <emu/HostReboot.h>
 #include <hal/audio.h>
 #include <hal/constants.h>
 #include <hal/channels.h>
@@ -82,6 +83,8 @@ namespace
     void (*completeHostFileDialog)(const char *);
     bool (*takeHostTextDialogRequest)(const char **, const char **, int *);
     void (*completeHostTextDialog)(const char *);
+    // Appended: true once after the firmware asked to reboot (Application.restart).
+    bool (*takeRebootRequest)();
   };
 
 #if defined(_WIN32)
@@ -931,6 +934,11 @@ namespace er301
       emu::HostTextDialog_complete(text);
   }
 
+  static bool backendTakeRebootRequest()
+  {
+    return backendIsReady() && emu::HostReboot_consume();
+  }
+
   static const void *backendImageCookie()
   {
     return static_cast<const void *>(&g_owned);
@@ -964,7 +972,8 @@ namespace
         er301::backendTakeHostFileDialogRequest,
         er301::backendCompleteHostFileDialog,
         er301::backendTakeHostTextDialogRequest,
-        er301::backendCompleteHostTextDialog};
+        er301::backendCompleteHostTextDialog,
+        er301::backendTakeRebootRequest};
     return &api;
   }
 }
@@ -1127,6 +1136,14 @@ namespace er301
         mSlot.load(std::memory_order_acquire));
     if (slot && slot->api->completeHostTextDialog)
       slot->api->completeHostTextDialog(cancelled ? nullptr : text.c_str());
+  }
+
+  bool Instance::takeRebootRequest()
+  {
+    EngineSlot *slot = static_cast<EngineSlot *>(
+        mSlot.load(std::memory_order_acquire));
+    return slot && slot->api->takeRebootRequest &&
+           slot->api->takeRebootRequest();
   }
 
   void Instance::setButton(Button button, bool pressed)

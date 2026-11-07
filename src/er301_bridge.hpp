@@ -114,6 +114,10 @@ namespace er301
     void completeHostTextDialog(const std::string &text,
                                 bool cancelled = false);
 
+    // True once after the firmware requested a reboot (Package Manager
+    // "restart", firmware update). The host must close and reopen the engine.
+    bool takeRebootRequest();
+
     void setButton(Button b, bool pressed);
     void turnEncoder(int delta);
     void setStorageSwitch(int pos);

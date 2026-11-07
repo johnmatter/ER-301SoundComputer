@@ -1092,6 +1092,10 @@ struct ER301 : Module {
     // carries the same ER-301 snapshot inline and can restore independently.
     std::vector<uint8_t> pendingModulePresetState;
     bool freshStateRequested = false;
+    // The firmware asked to reboot (Package Manager "restart"). It has already
+    // quicksaved to its own restore file, so the next boot must not stage the
+    // older Rack patch snapshot over it.
+    bool firmwareRebootPending = false;
     std::atomic<bool> suppressInlineStateOnce{false};
 
     // --- control state (UI thread) ---
@@ -1284,6 +1288,11 @@ struct ER301 : Module {
             return false;
         }
 
+        // A firmware-requested reboot restores from the quicksave the firmware
+        // wrote just before rebooting, exactly as the hardware does.
+        if (firmwareRebootPending)
+            return true;
+
         // Initialize intentionally starts this one module from a clean ER-301
         // state. Never let an older Rack patch-storage snapshot leak back in.
         if (freshStateRequested)
@@ -1378,6 +1387,7 @@ struct ER301 : Module {
         Module::onReset(e);
         pendingModulePresetState.clear();
         freshStateRequested = true;
+        firmwareRebootPending = false;
         scrollRegionMode = SCROLL_CONTROLS;
         panelColor = loadPanelColorPreference();
         screenColor = loadScreenColorPreference();
@@ -1560,6 +1570,7 @@ struct ER301 : Module {
             // The hand-off has now been consumed by the ER-301 boot path.
             pendingModulePresetState.clear();
             freshStateRequested = false;
+            firmwareRebootPending = false;
 
             configureAudioPath(hostRate);
             INFO("ER301[%s]: engine slot %u initialized.",
@@ -1580,6 +1591,19 @@ struct ER301 : Module {
 
         if (initFailed.load(std::memory_order_acquire) || !engine.isReady())
             return;
+
+        // The firmware's reboot() only raises a flag inside the engine image.
+        // Honour it like the hardware: tear the engine down and boot it again
+        // on the next UI step, keeping this instance's identity and rear card
+        // so packages reload and the firmware's restore quicksave is found.
+        if (engine.takeRebootRequest()) {
+            INFO("ER301[%s]: firmware requested a reboot.", instanceKey.c_str());
+            pendingModulePresetState.clear();
+            freshStateRequested = false;
+            firmwareRebootPending = true;
+            resetHostLifecycle(false);
+            return;
+        }
 
         serviceHostFileDialog();
 
@@ -1797,6 +1821,7 @@ struct ER301 : Module {
                 else {
                     pendingModulePresetState.swap(decoded);
                     freshStateRequested = false;
+                    firmwareRebootPending = false;
                     resetHostLifecycle(false);
                 }
             }
@@ -1807,6 +1832,7 @@ struct ER301 : Module {
         else if (requestsFreshState) {
             pendingModulePresetState.clear();
             freshStateRequested = true;
+            firmwareRebootPending = false;
             // A replayed Initialize/history state should be just as clean as
             // adding a new module, including a fresh private rear/config root.
             resetHostLifecycle(true);
